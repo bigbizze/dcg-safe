@@ -1,0 +1,7 @@
+interface:
+  display_name: "dcg-safe"
+  short_description: "Capture command evidence under trusted roots"
+  default_prompt: "Use $dcg-safe to capture an allowed child command's stdout, stderr, and outcome without shell redirection."
+
+policy:
+  allow_implicit_invocation: true

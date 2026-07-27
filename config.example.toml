@@ -1,0 +1,8 @@
+schema = 1
+
+allowed_roots = [
+  "/tmp",
+  "~/tmp",
+  "~/WebstormProjects",
+  "~/Documents",
+]
