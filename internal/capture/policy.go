@@ -457,11 +457,14 @@ func parseDCGHookRecord(stdout []byte) (dcgHookRecord, error) {
 		seen[key] = struct{}{}
 		switch key {
 		case "index":
-			var index int
+			var index *int
 			if err := decoder.Decode(&index); err != nil {
 				return dcgHookRecord{}, fmt.Errorf("parse DCG response index: %w", err)
 			}
-			record.Index = &index
+			if index == nil {
+				return dcgHookRecord{}, errors.New("DCG response index must be an integer")
+			}
+			record.Index = index
 		case "decision":
 			var decision string
 			if err := decoder.Decode(&decision); err != nil {

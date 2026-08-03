@@ -730,6 +730,11 @@ func TestChildPolicyRejectsMalformedRobotRecords(t *testing.T) {
 			wantErr: `duplicate "index"`,
 		},
 		{
+			name:    "null index",
+			stdout:  []byte(`{"index":null,"decision":"allow"}` + "\n"),
+			wantErr: "index must be an integer",
+		},
+		{
 			name:    "invalid utf8 ignored field",
 			stdout:  []byte{'{', '"', 'i', 'n', 'd', 'e', 'x', '"', ':', '0', ',', '"', 'd', 'e', 'c', 'i', 's', 'i', 'o', 'n', '"', ':', '"', 'a', 'l', 'l', 'o', 'w', '"', ',', '"', 'n', 'o', 't', 'e', '"', ':', '"', 0xff, '"', '}', '\n'},
 			wantErr: "valid UTF-8",
