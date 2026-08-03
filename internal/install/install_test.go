@@ -16,14 +16,14 @@ import (
 func TestTargetMappings(t *testing.T) {
 	root := t.TempDir()
 	tests := []struct {
-		target string
-		want   map[string]int
-		notice bool
+		target      string
+		want        map[string]int
+		noticeCount int
 	}{
-		{target: "tools", want: map[string]int{"tools": 1}},
-		{target: "codex", want: map[string]int{"tools": 1, "codex": 2}, notice: true},
-		{target: "claude", want: map[string]int{"tools": 1, "claude": 2}},
-		{target: "all", want: map[string]int{"tools": 1, "codex": 2, "claude": 2}, notice: true},
+		{target: "tools", want: map[string]int{"tools": 1}, noticeCount: 1},
+		{target: "codex", want: map[string]int{"tools": 1, "codex": 2}, noticeCount: 2},
+		{target: "claude", want: map[string]int{"tools": 1, "claude": 2}, noticeCount: 1},
+		{target: "all", want: map[string]int{"tools": 1, "codex": 2, "claude": 2}, noticeCount: 2},
 	}
 	for _, test := range tests {
 		t.Run(test.target, func(t *testing.T) {
@@ -52,11 +52,16 @@ func TestTargetMappings(t *testing.T) {
 					}
 				}
 			}
-			if (len(result.Notices) == 1) != test.notice {
+			if len(result.Notices) != test.noticeCount {
 				t.Fatalf("notices = %#v", result.Notices)
 			}
-			if test.notice && result.Notices[0] != codexNotice {
-				t.Fatalf("notice = %q", result.Notices[0])
+			if len(result.Notices) == 0 || result.Notices[0] != policyNotice {
+				t.Fatalf("policy notice = %#v", result.Notices)
+			}
+			if test.target == "codex" || test.target == "all" {
+				if result.Notices[1] != codexNotice {
+					t.Fatalf("codex notice = %#v", result.Notices)
+				}
 			}
 		})
 	}

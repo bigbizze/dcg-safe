@@ -80,6 +80,25 @@ func execute(options Options, diagnostics io.Writer, ops runtimeOps) int {
 		options.Stdin = os.Stdin
 	}
 
+	policy := childPolicy(options.Command)
+	switch policy.decision {
+	case childPolicyAllow:
+	case childPolicyDeny:
+		if policy.ruleID != "" {
+			fmt.Fprintf(diagnostics, "dcg-safe: policy denied child command (rule %s)\n", policy.ruleID)
+		} else {
+			fmt.Fprintln(diagnostics, "dcg-safe: policy denied child command")
+		}
+		return SetupFailure
+	default:
+		if policy.err != nil {
+			fmt.Fprintln(diagnostics, "dcg-safe: policy check:", policy.err)
+		} else {
+			fmt.Fprintln(diagnostics, "dcg-safe: policy check failed")
+		}
+		return SetupFailure
+	}
+
 	reservation, err := securepath.Reserve(
 		options.Roots,
 		[3]string{options.StdoutPath, options.StderrPath, options.StatusPath},

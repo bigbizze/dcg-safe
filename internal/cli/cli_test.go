@@ -106,7 +106,7 @@ func TestInternalDelegateInstallJSONPlan(t *testing.T) {
 			}
 		}
 	}
-	if len(result.Notices) != 1 || strings.Contains(stdout.String(), "AGENTS.md") {
+	if len(result.Notices) != 2 || strings.Contains(stdout.String(), "AGENTS.md") {
 		t.Fatalf("unexpected notices/stdout: notices=%#v stdout=%s", result.Notices, stdout.String())
 	}
 }
