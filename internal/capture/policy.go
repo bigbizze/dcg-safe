@@ -21,6 +21,7 @@ import (
 const (
 	childPolicyTimeout       = 5 * time.Second
 	childPolicyMaxOutputSize = 64 * 1024
+	minimumDCGVersion        = "0.9.2"
 )
 
 type childPolicyDecision int
@@ -120,6 +121,9 @@ func evaluateChildPolicy(command []string, hooks childPolicyHooks) childPolicyRe
 
 	ctx, cancel := context.WithTimeout(context.Background(), hooks.timeout)
 	defer cancel()
+	if err := verifyDCGVersion(ctx, hooks, dcgPath, cwd, env); err != nil {
+		return childPolicyResult{decision: childPolicyFailure, err: err}
+	}
 	output, err := hooks.run(
 		ctx,
 		dcgPath,
@@ -142,6 +146,31 @@ func evaluateChildPolicy(command []string, hooks childPolicyHooks) childPolicyRe
 		}
 	}
 	return interpretDCGPolicyOutput(output.exitCode, output.stdout)
+}
+
+func verifyDCGVersion(ctx context.Context, hooks childPolicyHooks, dcgPath, cwd string, env []string) error {
+	output, err := hooks.run(ctx, dcgPath, []string{"--version"}, cwd, env, nil)
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return errors.New("DCG version check timed out")
+	}
+	if err != nil {
+		return fmt.Errorf("run DCG version check: %w", err)
+	}
+	if output.stdoutOversized || output.stderrOversized ||
+		len(output.stdout) > childPolicyMaxOutputSize || len(output.stderr) > childPolicyMaxOutputSize {
+		return fmt.Errorf("DCG version check output exceeds %d bytes", childPolicyMaxOutputSize)
+	}
+	if output.exitCode != 0 {
+		return fmt.Errorf("DCG version check exited with status %d", output.exitCode)
+	}
+	version, err := parseDCGVersion(output.stdout)
+	if err != nil {
+		return err
+	}
+	if compareDCGVersion(version, dcgVersion{major: 0, minor: 9, patch: 2}) < 0 {
+		return fmt.Errorf("DCG %s is unsupported; require %s+", version.String(), minimumDCGVersion)
+	}
+	return nil
 }
 
 func childPolicyHookEvent(command []string) ([]byte, error) {
@@ -263,6 +292,7 @@ func runDCGPolicyEvaluator(
 	stdin []byte,
 ) (dcgEvaluatorOutput, error) {
 	command := exec.CommandContext(ctx, dcgPath, args...)
+	command.WaitDelay = 100 * time.Millisecond
 	command.Dir = cwd
 	command.Env = env
 	command.Stdin = bytes.NewReader(stdin)
@@ -383,7 +413,10 @@ func interpretDCGPolicyOutput(exitCode int, stdout []byte) childPolicyResult {
 }
 
 func parseDCGHookRecord(stdout []byte) (dcgHookRecord, error) {
-	trimmed := bytes.TrimSpace(stdout)
+	if !utf8.Valid(stdout) {
+		return dcgHookRecord{}, errors.New("DCG response is not valid UTF-8")
+	}
+	trimmed := trimJSONWhitespace(stdout)
 	if len(trimmed) == 0 {
 		return dcgHookRecord{}, errors.New("DCG response is empty")
 	}
@@ -393,15 +426,132 @@ func parseDCGHookRecord(stdout []byte) (dcgHookRecord, error) {
 	if bytes.Contains(trimmed, []byte{'\n'}) {
 		return dcgHookRecord{}, errors.New("DCG response must contain exactly one JSONL record")
 	}
+	if bytes.Contains(trimmed, []byte{'\r'}) {
+		return dcgHookRecord{}, errors.New("DCG response must contain exactly one JSONL record")
+	}
 
 	decoder := json.NewDecoder(bytes.NewReader(trimmed))
-	var record dcgHookRecord
-	if err := decoder.Decode(&record); err != nil {
+	decoder.UseNumber()
+	token, err := decoder.Token()
+	if err != nil {
 		return dcgHookRecord{}, fmt.Errorf("parse DCG response: %w", err)
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || delim != '{' {
+		return dcgHookRecord{}, errors.New("DCG response must be a JSON object")
+	}
+	var record dcgHookRecord
+	seen := map[string]struct{}{}
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return dcgHookRecord{}, fmt.Errorf("parse DCG response: %w", err)
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return dcgHookRecord{}, errors.New("DCG response object contains a non-string key")
+		}
+		if _, ok := seen[key]; ok {
+			return dcgHookRecord{}, fmt.Errorf("DCG response contains duplicate %q field", key)
+		}
+		seen[key] = struct{}{}
+		switch key {
+		case "index":
+			var index int
+			if err := decoder.Decode(&index); err != nil {
+				return dcgHookRecord{}, fmt.Errorf("parse DCG response index: %w", err)
+			}
+			record.Index = &index
+		case "decision":
+			var decision string
+			if err := decoder.Decode(&decision); err != nil {
+				return dcgHookRecord{}, fmt.Errorf("parse DCG response decision: %w", err)
+			}
+			record.Decision = &decision
+		case "rule_id":
+			var ruleID string
+			if err := decoder.Decode(&ruleID); err != nil {
+				return dcgHookRecord{}, fmt.Errorf("parse DCG response rule_id: %w", err)
+			}
+			record.RuleID = &ruleID
+		default:
+			var ignored json.RawMessage
+			if err := decoder.Decode(&ignored); err != nil {
+				return dcgHookRecord{}, fmt.Errorf("parse DCG response %s: %w", key, err)
+			}
+		}
+	}
+	endToken, err := decoder.Token()
+	if err != nil {
+		return dcgHookRecord{}, fmt.Errorf("parse DCG response: %w", err)
+	}
+	end, ok := endToken.(json.Delim)
+	if !ok || end != '}' {
+		return dcgHookRecord{}, errors.New("DCG response object is incomplete")
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return dcgHookRecord{}, errors.New("DCG response contains trailing JSON")
 	}
 	return record, nil
+}
+
+func trimJSONWhitespace(body []byte) []byte {
+	start := 0
+	for start < len(body) && isJSONWhitespace(body[start]) {
+		start++
+	}
+	end := len(body)
+	for end > start && isJSONWhitespace(body[end-1]) {
+		end--
+	}
+	return body[start:end]
+}
+
+func isJSONWhitespace(value byte) bool {
+	switch value {
+	case ' ', '\t', '\r', '\n':
+		return true
+	default:
+		return false
+	}
+}
+
+type dcgVersion struct {
+	major int
+	minor int
+	patch int
+}
+
+func (version dcgVersion) String() string {
+	return fmt.Sprintf("%d.%d.%d", version.major, version.minor, version.patch)
+}
+
+func parseDCGVersion(stdout []byte) (dcgVersion, error) {
+	if !utf8.Valid(stdout) {
+		return dcgVersion{}, errors.New("DCG version output is not valid UTF-8")
+	}
+	fields := strings.FieldsFunc(string(stdout), func(char rune) bool {
+		return char < '0' || char > '9'
+	})
+	for index := 0; index+2 < len(fields); index++ {
+		major, majorErr := strconv.Atoi(fields[index])
+		minor, minorErr := strconv.Atoi(fields[index+1])
+		patch, patchErr := strconv.Atoi(fields[index+2])
+		if majorErr == nil && minorErr == nil && patchErr == nil {
+			return dcgVersion{major: major, minor: minor, patch: patch}, nil
+		}
+	}
+	return dcgVersion{}, errors.New("DCG version output did not contain a semantic version")
+}
+
+func compareDCGVersion(left, right dcgVersion) int {
+	switch {
+	case left.major != right.major:
+		return left.major - right.major
+	case left.minor != right.minor:
+		return left.minor - right.minor
+	default:
+		return left.patch - right.patch
+	}
 }

@@ -569,14 +569,14 @@ func TestChildPolicyEvaluatorResults(t *testing.T) {
 			hooks := policyTestHooks(t)
 			if test.timeout {
 				hooks.timeout = 10 * time.Millisecond
-				hooks.run = func(ctx context.Context, _ string, _ []string, _ string, _ []string, _ []byte) (dcgEvaluatorOutput, error) {
+				hooks.run = policyRunWithVersion(func(ctx context.Context, _ string, _ []string, _ string, _ []string, _ []byte) (dcgEvaluatorOutput, error) {
 					<-ctx.Done()
 					return dcgEvaluatorOutput{}, ctx.Err()
-				}
+				})
 			} else {
-				hooks.run = func(context.Context, string, []string, string, []string, []byte) (dcgEvaluatorOutput, error) {
+				hooks.run = policyRunWithVersion(func(context.Context, string, []string, string, []string, []byte) (dcgEvaluatorOutput, error) {
 					return test.output, test.runErr
-				}
+				})
 			}
 			result := evaluateChildPolicy([]string{"cmd"}, hooks)
 			if result.decision != test.wantDecision {
@@ -593,6 +593,27 @@ func TestChildPolicyEvaluatorResults(t *testing.T) {
 				t.Fatalf("err = %v, want substring %q", result.err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestChildPolicyRejectsUnsupportedDCGVersion(t *testing.T) {
+	hooks := policyTestHooks(t)
+	hooks.run = func(_ context.Context, _ string, args []string, _ string, _ []string, _ []byte) (dcgEvaluatorOutput, error) {
+		if isVersionProbe(args) {
+			return dcgEvaluatorOutput{
+				exitCode: 0,
+				stdout:   []byte("0.9.1\n"),
+			}, nil
+		}
+		return dcgEvaluatorOutput{
+			exitCode: 0,
+			stdout:   []byte(`{"index":0,"decision":"allow"}` + "\n"),
+		}, nil
+	}
+	result := evaluateChildPolicy([]string{"cmd"}, hooks)
+	if result.decision != childPolicyFailure || result.err == nil ||
+		!strings.Contains(result.err.Error(), "require 0.9.2+") {
+		t.Fatalf("result = %+v", result)
 	}
 }
 
@@ -647,7 +668,7 @@ func TestChildPolicySynthesizesQuotedBashEvent(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			hooks := policyTestHooks(t)
 			called := false
-			hooks.run = func(_ context.Context, dcgPath string, args []string, _ string, _ []string, stdin []byte) (dcgEvaluatorOutput, error) {
+			hooks.run = policyRunWithVersion(func(_ context.Context, dcgPath string, args []string, _ string, _ []string, stdin []byte) (dcgEvaluatorOutput, error) {
 				called = true
 				if filepath.Base(dcgPath) != "dcg" {
 					t.Fatalf("dcg path = %s", dcgPath)
@@ -670,7 +691,7 @@ func TestChildPolicySynthesizesQuotedBashEvent(t *testing.T) {
 					exitCode: 0,
 					stdout:   []byte(`{"index":0,"decision":"allow"}` + "\n"),
 				}, nil
-			}
+			})
 			result := evaluateChildPolicy(test.command, hooks)
 			if test.wantErr == "" {
 				if result.decision != childPolicyAllow || result.err != nil {
@@ -689,6 +710,56 @@ func TestChildPolicySynthesizesQuotedBashEvent(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestChildPolicyRejectsMalformedRobotRecords(t *testing.T) {
+	tests := []struct {
+		name    string
+		stdout  []byte
+		wantErr string
+	}{
+		{
+			name:    "duplicate decision",
+			stdout:  []byte(`{"index":0,"decision":"deny","decision":"allow"}` + "\n"),
+			wantErr: `duplicate "decision"`,
+		},
+		{
+			name:    "duplicate index",
+			stdout:  []byte(`{"index":1,"index":0,"decision":"allow"}` + "\n"),
+			wantErr: `duplicate "index"`,
+		},
+		{
+			name:    "invalid utf8 ignored field",
+			stdout:  []byte{'{', '"', 'i', 'n', 'd', 'e', 'x', '"', ':', '0', ',', '"', 'd', 'e', 'c', 'i', 's', 'i', 'o', 'n', '"', ':', '"', 'a', 'l', 'l', 'o', 'w', '"', ',', '"', 'n', 'o', 't', 'e', '"', ':', '"', 0xff, '"', '}', '\n'},
+			wantErr: "valid UTF-8",
+		},
+		{
+			name:    "non json unicode whitespace",
+			stdout:  []byte("\u00a0" + `{"index":0,"decision":"allow"}` + "\n"),
+			wantErr: "parse DCG response",
+		},
+		{
+			name:    "duplicate unknown metadata",
+			stdout:  []byte(`{"index":0,"decision":"allow","pack_id":"core","pack_id":"other"}` + "\n"),
+			wantErr: `duplicate "pack_id"`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := interpretDCGPolicyOutput(0, test.stdout)
+			if result.decision != childPolicyFailure || result.err == nil ||
+				!strings.Contains(result.err.Error(), test.wantErr) {
+				t.Fatalf("result = %+v, want error containing %q", result, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestChildPolicyAllowsUniqueRobotMetadata(t *testing.T) {
+	result := interpretDCGPolicyOutput(1, []byte(`{"index":0,"decision":"deny","rule_id":"core.git:reset-hard","pack_id":"core","reason":"blocked"}`+"\n"))
+	if result.decision != childPolicyDeny || result.err != nil || result.ruleID != "core.git:reset-hard" {
+		t.Fatalf("result = %+v", result)
 	}
 }
 
@@ -722,6 +793,39 @@ func TestChildPolicyRequiresColocatedRegularDCG(t *testing.T) {
 	}
 	if _, err := resolvePeerDCG(executable); err != nil {
 		t.Fatalf("regular executable dcg rejected: %v", err)
+	}
+}
+
+func TestPolicyEvaluatorDoesNotHangOnInheritedOutputPipes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses POSIX shell")
+	}
+	directory := t.TempDir()
+	dcg := filepath.Join(directory, "dcg")
+	body := "#!/bin/sh\n(sleep 30) &\nprintf '%s\\n' '{\"index\":0,\"decision\":\"allow\"}'\nexit 0\n"
+	if err := os.WriteFile(dcg, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dcg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := runDCGPolicyEvaluator(
+		ctx,
+		dcg,
+		[]string{"hook", "--batch", "--robot", "--no-color", "--no-suggestions"},
+		directory,
+		os.Environ(),
+		[]byte(`{"tool_name":"Bash","tool_input":{"command":"true"}}`+"\n"),
+	)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("runDCGPolicyEvaluator unexpectedly succeeded with inherited output pipe")
+	}
+	if elapsed > time.Second {
+		t.Fatalf("runDCGPolicyEvaluator waited %s, err=%v", elapsed, err)
 	}
 }
 
@@ -783,14 +887,14 @@ func TestPolicyEvaluatorEnvironmentSanitizedAndChildEnvironmentUnchanged(t *test
 	var evaluatorEnv []string
 	hooks := policyTestHooks(t)
 	hooks.lookupHome = func(int) (string, error) { return "/resolved/home", nil }
-	hooks.run = func(_ context.Context, _ string, _ []string, cwd string, env []string, _ []byte) (dcgEvaluatorOutput, error) {
+	hooks.run = policyRunWithVersion(func(_ context.Context, _ string, _ []string, cwd string, env []string, _ []byte) (dcgEvaluatorOutput, error) {
 		evaluatorCWD = cwd
 		evaluatorEnv = append([]string(nil), env...)
 		return dcgEvaluatorOutput{
 			exitCode: 0,
 			stdout:   []byte(`{"index":0,"decision":"allow"}` + "\n"),
 		}, nil
-	}
+	})
 	withChildPolicy(t, func(command []string) childPolicyResult {
 		return evaluateChildPolicy(command, hooks)
 	})
@@ -942,6 +1046,24 @@ func policyTestHooks(t *testing.T) childPolicyHooks {
 		environ: os.Environ,
 		timeout: time.Second,
 	}
+}
+
+func policyRunWithVersion(
+	run func(context.Context, string, []string, string, []string, []byte) (dcgEvaluatorOutput, error),
+) func(context.Context, string, []string, string, []string, []byte) (dcgEvaluatorOutput, error) {
+	return func(ctx context.Context, dcgPath string, args []string, cwd string, env []string, stdin []byte) (dcgEvaluatorOutput, error) {
+		if isVersionProbe(args) {
+			return dcgEvaluatorOutput{
+				exitCode: 0,
+				stdout:   []byte("0.9.2\n"),
+			}, nil
+		}
+		return run(ctx, dcgPath, args, cwd, env, stdin)
+	}
+}
+
+func isVersionProbe(args []string) bool {
+	return len(args) == 1 && args[0] == "--version"
 }
 
 type trackingReader struct {
