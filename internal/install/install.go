@@ -19,7 +19,10 @@ import (
 	"github.com/bigbizze/dcg-safe/internal/version"
 )
 
-const codexNotice = "Use the dcg-safe skill when command stdout, stderr, and exit status must be captured beneath configured roots and shell redirection would trigger DCG. Do not use it to bypass a DCG denial of the child command."
+const (
+	policyNotice = "dcg-safe v0.2.0 requires DCG 0.9.2+ installed as an executable named dcg beside dcg-safe; child commands are checked before capture files are reserved and fail closed with exit 125 on denial or evaluator failure."
+	codexNotice  = "Use the dcg-safe skill when command stdout, stderr, and exit status must be captured beneath configured roots and shell redirection would trigger DCG. Do not use it to bypass a DCG denial of the child command."
+)
 
 // Result is the schema-1 delegated installer response.
 type Result struct {
@@ -179,8 +182,11 @@ func Execute(options Options) (Result, error) {
 		})
 		result.Targets[targetName] = target
 	}
-	if options.Operation != "uninstall" && (options.Target == "codex" || options.Target == "all") {
-		result.Notices = append(result.Notices, codexNotice)
+	if options.Operation != "uninstall" {
+		result.Notices = append(result.Notices, policyNotice)
+		if options.Target == "codex" || options.Target == "all" {
+			result.Notices = append(result.Notices, codexNotice)
+		}
 	}
 	return result, nil
 }

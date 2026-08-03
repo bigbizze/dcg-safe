@@ -1,12 +1,14 @@
 # dcg-safe
 
-`dcg-safe` v0.1 captures the stdout, stderr, and outcome of one child command
+`dcg-safe` v0.2.0 captures the stdout, stderr, and outcome of one child command
 in three new files beneath configured trusted roots.
 
 It is an evidence-capture wrapper, not a logger, command sandbox, replacement
 for DCG, or temporary-directory manager. Trusted roots constrain only the
-capture destinations. The child inherits the wrapper's working directory,
-environment, and stdin, and retains its normal filesystem access.
+capture destinations. Before it reserves those destinations, dcg-safe asks a
+co-located DCG 0.9.2+ evaluator whether the exact child command is allowed.
+The child inherits the wrapper's working directory, environment, and stdin, and
+retains its normal filesystem access.
 
 ## Capture a command
 
@@ -19,8 +21,10 @@ dcg-safe capture \
 ```
 
 All three paths are mandatory, absolute, explicitly named, and must not already
-exist. dcg-safe reserves all three before it starts the child. The command is
-executed directly as an argument vector; no shell evaluates its arguments.
+exist. dcg-safe checks the child command with DCG before reserving any capture
+file, then reserves all three before it starts the child. The command is
+executed directly as an argument vector; no shell evaluates its arguments or
+the synthetic Bash command string sent to DCG.
 
 The status file is authoritative only when its complete contents are an integer
 followed by one newline. stdout and stderr are closed before this record is
@@ -28,7 +32,8 @@ completed.
 
 | Outcome | Status and wrapper exit |
 | --- | ---: |
-| Setup failed; child did not start | 125 (reserved files are rolled back) |
+| Setup or policy check failed; child did not start | 125 (reserved files are absent or rolled back) |
+| DCG denied the child command | 125 (no capture files are created) |
 | Executable or shebang interpreter missing | 127 |
 | Executable cannot be invoked (`EACCES`, `ENOEXEC`, directory, or `exec.ErrDot`) | 126 |
 | Other invocation failure | 125 |
@@ -106,22 +111,54 @@ Final names are created with descriptor-relative `openat`, `O_NOFOLLOW`,
 
 ## DCG boundary
 
-The normal DCG hook inspects the `dcg-safe` wrapper invocation. dcg-safe never
-calls `dcg test` internally and does not authorize the wrapped command.
+dcg-safe v0.2.0 requires DCG 0.9.2 or newer installed as an executable named
+`dcg` beside the canonical `dcg-safe` executable. It resolves its own
+executable with `os.Executable` and symlink resolution, then invokes only that
+adjacent `dcg`; caller-controlled `PATH` is not consulted for the policy
+evaluator.
+
+For each capture, dcg-safe POSIX-quotes every child argument and submits one
+synthetic Bash hook event to:
+
+```text
+dcg hook --batch --robot --no-color --no-suggestions
+```
+
+The synthetic command string is policy input only. dcg-safe never evaluates it
+through a shell, never calls `dcg test`, and never changes the argument vector
+used for the actual child.
+
+Policy evaluation uses the real current working directory and a sanitized
+environment. `HOME` is resolved from the effective UID's account record;
+`DCG_CONFIG`, `XDG_CONFIG_HOME`, and inherited `DCG_*` variables are ignored
+for the evaluator. The actual child still receives the wrapper's original
+environment unchanged.
+
+dcg-safe permits the child only when DCG exits 0 and emits exactly one robot
+record with `index: 0` and `decision: "allow"`. DCG exit 1 with one valid
+`decision: "deny"` record is reported as a policy denial, including `rule_id`
+when DCG provides one. Invalid UTF-8 argv, missing or non-executable co-located
+DCG, timeouts, output over 64 KiB, malformed JSON, contradictory records, and
+unknown evaluator statuses all fail closed with wrapper exit 125. These policy
+denials and failures occur before capture files are reserved.
 
 Use the dcg-safe skill when command stdout, stderr, and exit status must be
 captured beneath configured roots and shell redirection would trigger DCG. Do
 not use it to bypass a DCG denial of the child command.
 
-The expected manual compatibility check for v0.1 is DCG 0.6.9: verify that it
-permits a benign capture invocation and still denies plainly destructive child
-commands when wrapped.
+The expected manual compatibility check for v0.2.0 is DCG 0.9.2 or newer:
+inside a disposable Git repository, verify that a benign wrapped child is
+captured and a plainly denied child exits 125 without creating capture files.
 
 ## Installation and delegated installer
 
 Release archives contain a static `dcg-safe` binary, this README, the MIT
 license, `install-skill.sh`, the example policy, and the auditable Claude and
 Codex payloads.
+
+The installer installs `dcg-safe` only. For capture to work in v0.2.0, install
+DCG 0.9.2 or newer as `dcg` in the same directory as the installed `dcg-safe`
+binary, for example `~/.local/bin/dcg` beside `~/.local/bin/dcg-safe`.
 
 The installer implements mise-en-place's delegated schema-1 contract:
 
@@ -158,7 +195,7 @@ HEAD is tagged and `dev` otherwise.
 
 ## Scope and exclusions
 
-Version 0.1 does not attempt to defend against hostile same-UID processes or
+Version 0.2.0 does not attempt to defend against hostile same-UID processes or
 processes belonging to a trusted group. ACL grants, mount races, network
 filesystem semantics, and crash or power-loss durability are outside its
 assurance boundary.
@@ -178,4 +215,5 @@ go vet ./...
 goreleaser release --snapshot --clean
 ```
 
-Stable releases begin with tag `v0.1.0`.
+Stable releases are tagged as `vMAJOR.MINOR.PATCH`; `v0.1.0` was the first
+stable tag, and v0.2.0 introduces the child-policy gate described above.
