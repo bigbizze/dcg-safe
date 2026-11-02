@@ -1,12 +1,12 @@
 # dcg-safe
 
-`dcg-safe` v0.2.0 captures the stdout, stderr, and outcome of one child command
+`dcg-safe` v0.2.1 captures the stdout, stderr, and outcome of one child command
 in three new files beneath configured trusted roots.
 
 It is an evidence-capture wrapper, not a logger, command sandbox, replacement
 for DCG, or temporary-directory manager. Trusted roots constrain only the
 capture destinations. Before it reserves those destinations, dcg-safe asks a
-co-located DCG 0.9.2+ evaluator whether the exact child command is allowed.
+co-located DCG 0.16.0+ evaluator whether the exact child command is allowed.
 The child inherits the wrapper's working directory, environment, and stdin, and
 retains its normal filesystem access.
 
@@ -111,7 +111,7 @@ Final names are created with descriptor-relative `openat`, `O_NOFOLLOW`,
 
 ## DCG boundary
 
-dcg-safe v0.2.0 requires DCG 0.9.2 or newer installed as an executable named
+dcg-safe v0.2.1 requires DCG 0.16.0 or newer installed as an executable named
 `dcg` beside the canonical `dcg-safe` executable. It resolves its own
 executable with `os.Executable` and symlink resolution, then invokes only that
 adjacent `dcg`; caller-controlled `PATH` is not consulted for the policy
@@ -142,11 +142,27 @@ DCG, timeouts, output over 64 KiB, malformed JSON, contradictory records, and
 unknown evaluator statuses all fail closed with wrapper exit 125. These policy
 denials and failures occur before capture files are reserved.
 
+A record that carries an `error` field is an evaluator failure, not a policy
+decision, even when its decision is `deny`. When DCG cannot load its own
+configuration it returns `error_kind: "configuration_error"` for every command.
+dcg-safe then exits 125 and shows the DCG reason, which names the file to
+repair. Check the repair with `dcg doctor --strict`.
+
+dcg-safe applies the DCG `[policy]` as DCG resolves it. A rule set to `warn` or
+`log` is reported as `decision: "allow"`, so dcg-safe runs the child. A rule set
+to `ask` is reported as `decision: "deny"`, because batch mode has no review
+channel, so dcg-safe blocks the child.
+
+DCG 0.16.0 is the minimum because earlier versions allow wrapped commands that
+0.16.0 denies, for example `bash -c 'IFS=,; x=rm,-rf,/home/u; $x'`. Earlier
+versions also skip a config file that does not load and continue with only the
+default rules, so the block rules in that file are not applied.
+
 Use the dcg-safe skill when command stdout, stderr, and exit status must be
 captured beneath configured roots and shell redirection would trigger DCG. Do
 not use it to bypass a DCG denial of the child command.
 
-The expected manual compatibility check for v0.2.0 is DCG 0.9.2 or newer:
+The expected manual compatibility check for v0.2.1 is DCG 0.16.0 or newer:
 inside a disposable Git repository, verify that a benign wrapped child is
 captured and a plainly denied child exits 125 without creating capture files.
 
@@ -156,8 +172,8 @@ Release archives contain a static `dcg-safe` binary, this README, the MIT
 license, `install-skill.sh`, the example policy, and the auditable Claude and
 Codex payloads.
 
-The installer installs `dcg-safe` only. For capture to work in v0.2.0, install
-DCG 0.9.2 or newer as `dcg` in the same directory as the installed `dcg-safe`
+The installer installs `dcg-safe` only. For capture to work in v0.2.1, install
+DCG 0.16.0 or newer as `dcg` in the same directory as the installed `dcg-safe`
 binary, for example `~/.local/bin/dcg` beside `~/.local/bin/dcg-safe`.
 
 The installer implements mise-en-place's delegated schema-1 contract:
@@ -195,7 +211,7 @@ HEAD is tagged and `dev` otherwise.
 
 ## Scope and exclusions
 
-Version 0.2.0 does not attempt to defend against hostile same-UID processes or
+Version 0.2.1 does not attempt to defend against hostile same-UID processes or
 processes belonging to a trusted group. ACL grants, mount races, network
 filesystem semantics, and crash or power-loss durability are outside its
 assurance boundary.
@@ -216,4 +232,5 @@ goreleaser release --snapshot --clean
 ```
 
 Stable releases are tagged as `vMAJOR.MINOR.PATCH`; `v0.1.0` was the first
-stable tag, and v0.2.0 introduces the child-policy gate described above.
+stable tag, v0.2.0 introduces the child-policy gate described above, and v0.2.1
+raises the DCG minimum to 0.16.0 and reports DCG configuration errors.

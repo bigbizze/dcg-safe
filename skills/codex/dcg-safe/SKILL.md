@@ -1,12 +1,12 @@
 ---
 name: dcg-safe
-description: Capture one allowed command's stdout, stderr, and exit outcome in new files beneath dcg-safe trusted roots. Requires DCG 0.9.2+ as dcg beside dcg-safe. Use when shell redirection would trigger DCG and evidence capture is required. Never use it to bypass a DCG denial.
+description: Capture one allowed command's stdout, stderr, and exit outcome in new files beneath dcg-safe trusted roots. Requires DCG 0.16.0+ as dcg beside dcg-safe. Use when shell redirection would trigger DCG and evidence capture is required. Never use it to bypass a DCG denial.
 ---
 
 # dcg-safe
 
 Use `dcg-safe` only to capture evidence for a child command that is permitted
-by DCG policy. dcg-safe v0.2.0 requires DCG 0.9.2 or newer installed as an
+by DCG policy. dcg-safe v0.2.1 requires DCG 0.16.0 or newer installed as an
 executable named `dcg` beside the canonical `dcg-safe` binary; it does not find
 DCG through caller-controlled `PATH`.
 
@@ -27,6 +27,10 @@ synthetic command is policy input only and is never executed through a shell.
 If DCG denies the child or the policy evaluator is unavailable, malformed,
 timed out, or contradictory, dcg-safe exits 125, starts no child, and leaves the
 capture files absent.
+
+If the diagnostic reports a DCG configuration error, DCG could not load its
+configuration and blocks every command. Do not work around it; report it so the
+DCG configuration can be repaired and checked with `dcg doctor --strict`.
 
 The status file is authoritative only when it contains exactly one
 newline-terminated integer. A missing or incomplete status record means capture

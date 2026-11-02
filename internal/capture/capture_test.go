@@ -602,7 +602,7 @@ func TestChildPolicyRejectsUnsupportedDCGVersion(t *testing.T) {
 		if isVersionProbe(args) {
 			return dcgEvaluatorOutput{
 				exitCode: 0,
-				stdout:   []byte("0.9.1\n"),
+				stdout:   []byte("0.15.3\n"),
 			}, nil
 		}
 		return dcgEvaluatorOutput{
@@ -612,7 +612,7 @@ func TestChildPolicyRejectsUnsupportedDCGVersion(t *testing.T) {
 	}
 	result := evaluateChildPolicy([]string{"cmd"}, hooks)
 	if result.decision != childPolicyFailure || result.err == nil ||
-		!strings.Contains(result.err.Error(), "require 0.9.2+") {
+		!strings.Contains(result.err.Error(), "require 0.16.0+") {
 		t.Fatalf("result = %+v", result)
 	}
 }
@@ -762,9 +762,37 @@ func TestChildPolicyRejectsMalformedRobotRecords(t *testing.T) {
 }
 
 func TestChildPolicyAllowsUniqueRobotMetadata(t *testing.T) {
-	result := interpretDCGPolicyOutput(1, []byte(`{"index":0,"decision":"deny","rule_id":"core.git:reset-hard","pack_id":"core","reason":"blocked"}`+"\n"))
+	result := interpretDCGPolicyOutput(1, []byte(`{"index":0,"decision":"deny","mode":"deny","rule_id":"core.git:reset-hard","pack_id":"core","reason":"blocked"}`+"\n"))
 	if result.decision != childPolicyDeny || result.err != nil || result.ruleID != "core.git:reset-hard" {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestChildPolicyReportsDCGErrorRecordsAsFailures(t *testing.T) {
+	tests := []struct {
+		name    string
+		stdout  []byte
+		wantErr string
+	}{
+		{
+			name:    "configuration error deny",
+			stdout:  []byte(`{"index":0,"decision":"deny","error_kind":"configuration_error","error":"DCG configuration error in '/home/u/.config/dcg/config.toml'"}` + "\n"),
+			wantErr: "DCG cannot load its configuration",
+		},
+		{
+			name:    "fail-closed parse error deny",
+			stdout:  []byte(`{"index":0,"decision":"deny","error":"Invalid JSON"}` + "\n"),
+			wantErr: "could not evaluate",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := interpretDCGPolicyOutput(1, test.stdout)
+			if result.decision != childPolicyFailure || result.err == nil ||
+				!strings.Contains(result.err.Error(), test.wantErr) {
+				t.Fatalf("result = %+v, want error containing %q", result, test.wantErr)
+			}
+		})
 	}
 }
 
@@ -1060,7 +1088,7 @@ func policyRunWithVersion(
 		if isVersionProbe(args) {
 			return dcgEvaluatorOutput{
 				exitCode: 0,
-				stdout:   []byte("0.9.2\n"),
+				stdout:   []byte("0.16.0\n"),
 			}, nil
 		}
 		return run(ctx, dcgPath, args, cwd, env, stdin)
