@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	policyNotice = "dcg-safe v0.2.0 requires DCG 0.9.2+ installed as an executable named dcg beside dcg-safe; child commands are checked before capture files are reserved and fail closed with exit 125 on denial or evaluator failure."
+	policyNotice = "dcg-safe v0.2.1 requires DCG 0.16.0+ installed as an executable named dcg beside dcg-safe; child commands are checked before capture files are reserved and fail closed with exit 125 on denial or evaluator failure."
 	codexNotice  = "Use the dcg-safe skill when command stdout, stderr, and exit status must be captured beneath configured roots and shell redirection would trigger DCG. Do not use it to bypass a DCG denial of the child command."
 )
 
