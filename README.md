@@ -146,7 +146,10 @@ A record that carries an `error` field is an evaluator failure, not a policy
 decision, even when its decision is `deny`. When DCG cannot load its own
 configuration it returns `error_kind: "configuration_error"` for every command.
 dcg-safe then exits 125 and shows the DCG reason, which names the file to
-repair. Check the repair with `dcg doctor --strict`.
+repair. Check the repair with `dcg doctor --strict` from the same working
+directory, with `HOME` set to your account home and without `DCG_CONFIG`,
+`XDG_CONFIG_HOME`, or other `DCG_*` variables, because the evaluator runs with
+that environment.
 
 dcg-safe applies the DCG `[policy]` as DCG resolves it. A rule set to `warn` or
 `log` is reported as `decision: "allow"`, so dcg-safe runs the child. A rule set

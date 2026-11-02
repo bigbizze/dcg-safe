@@ -784,13 +784,20 @@ func TestChildPolicyReportsDCGErrorRecordsAsFailures(t *testing.T) {
 			stdout:  []byte(`{"index":0,"decision":"deny","error":"Invalid JSON"}` + "\n"),
 			wantErr: "could not evaluate",
 		},
+		{
+			name:    "unknown error kind without message",
+			stdout:  []byte(`{"index":0,"decision":"allow","error_kind":"parse_error"}` + "\n"),
+			wantErr: "could not evaluate",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result := interpretDCGPolicyOutput(1, test.stdout)
-			if result.decision != childPolicyFailure || result.err == nil ||
-				!strings.Contains(result.err.Error(), test.wantErr) {
-				t.Fatalf("result = %+v, want error containing %q", result, test.wantErr)
+			for _, exitCode := range []int{0, 1} {
+				result := interpretDCGPolicyOutput(exitCode, test.stdout)
+				if result.decision != childPolicyFailure || result.err == nil ||
+					!strings.Contains(result.err.Error(), test.wantErr) {
+					t.Fatalf("exit %d result = %+v, want error containing %q", exitCode, result, test.wantErr)
+				}
 			}
 		})
 	}

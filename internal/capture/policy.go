@@ -383,20 +383,20 @@ func interpretDCGPolicyOutput(exitCode int, stdout []byte) childPolicyResult {
 	if record.Decision == nil {
 		return childPolicyResult{decision: childPolicyFailure, err: errors.New("DCG response is missing decision")}
 	}
-	if record.ErrorKind != nil && *record.ErrorKind == "configuration_error" {
-		reason := "repair the DCG configuration and run 'dcg doctor --strict'"
+	if record.ErrorKind != nil || record.Error != nil {
+		reason := "no reason given"
 		if record.Error != nil && *record.Error != "" {
 			reason = *record.Error
 		}
-		return childPolicyResult{
-			decision: childPolicyFailure,
-			err:      fmt.Errorf("DCG cannot load its configuration: %q", reason),
+		if record.ErrorKind != nil && *record.ErrorKind == "configuration_error" {
+			return childPolicyResult{
+				decision: childPolicyFailure,
+				err:      fmt.Errorf("DCG cannot load its configuration: %q", reason),
+			}
 		}
-	}
-	if record.Error != nil {
 		return childPolicyResult{
 			decision: childPolicyFailure,
-			err:      fmt.Errorf("DCG could not evaluate the child command: %q", *record.Error),
+			err:      fmt.Errorf("DCG could not evaluate the child command: %q", reason),
 		}
 	}
 
@@ -497,17 +497,17 @@ func parseDCGHookRecord(stdout []byte) (dcgHookRecord, error) {
 			}
 			record.RuleID = &ruleID
 		case "error":
-			var message string
+			var message *string
 			if err := decoder.Decode(&message); err != nil {
 				return dcgHookRecord{}, fmt.Errorf("parse DCG response error: %w", err)
 			}
-			record.Error = &message
+			record.Error = message
 		case "error_kind":
-			var kind string
+			var kind *string
 			if err := decoder.Decode(&kind); err != nil {
 				return dcgHookRecord{}, fmt.Errorf("parse DCG response error_kind: %w", err)
 			}
-			record.ErrorKind = &kind
+			record.ErrorKind = kind
 		default:
 			var ignored json.RawMessage
 			if err := decoder.Decode(&ignored); err != nil {
